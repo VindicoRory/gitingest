@@ -18,6 +18,7 @@ async def ingest_async(
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
+    github_token: Optional[str] = None,
 ) -> Tuple[str, str, str]:
     """
     Main entry point for ingesting a source and processing its contents.
@@ -41,6 +42,8 @@ async def ingest_async(
         The branch to clone and ingest. If `None`, the default branch is used.
     output : str, optional
         File path where the summary and content should be written. If `None`, the results are not written to a file.
+    github_token : str, optional
+        GitHub token for private repository access. If `None`, the token from config.py is used if available.
 
     Returns
     -------
@@ -64,6 +67,7 @@ async def ingest_async(
             from_web=False,
             include_patterns=include_patterns,
             ignore_patterns=exclude_patterns,
+            github_token=github_token,
         )
 
         if parsed_query.url:
@@ -103,6 +107,7 @@ def ingest(
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
+    github_token: Optional[str] = None,
 ) -> Tuple[str, str, str]:
     """
     Synchronous version of ingest_async.
@@ -126,6 +131,8 @@ def ingest(
         The branch to clone and ingest. If `None`, the default branch is used.
     output : str, optional
         File path where the summary and content should be written. If `None`, the results are not written to a file.
+    github_token : str, optional
+        GitHub token for private repository access. If `None`, the token from config.py is used if available.
 
     Returns
     -------
@@ -147,5 +154,6 @@ def ingest(
             exclude_patterns=exclude_patterns,
             branch=branch,
             output=output,
+            github_token=github_token,
         )
     )
