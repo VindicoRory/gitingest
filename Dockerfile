@@ -19,6 +19,8 @@ FROM python:3.12-slim
 # Set Python environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# GitHub token for private repository access
+ENV GITINGEST_GITHUB_TOKEN=""
 
 # Install Git
 RUN apt-get update \
