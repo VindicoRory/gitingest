@@ -9,7 +9,7 @@ from starlette.templating import _TemplateResponse
 from gitingest.cloning import clone_repo
 from gitingest.ingestion import ingest_query
 from gitingest.query_parsing import ParsedQuery, parse_query
-from server.server_config import EXAMPLE_REPOS, MAX_DISPLAY_SIZE, templates
+from server.server_config import EXAMPLE_REPOS, MAX_DISPLAY_SIZE, templates, GITHUB_TOKEN
 from server.server_utils import Colors, log_slider_to_size
 
 
@@ -55,6 +55,11 @@ async def process_query(
     ValueError
         If an invalid pattern type is provided.
     """
+    from server.server_config import GITHUB_TOKEN
+    
+    # Use the provided token or fall back to the server config token
+    effective_token = github_token or GITHUB_TOKEN
+    
     if pattern_type == "include":
         include_patterns = pattern
         exclude_patterns = None
@@ -75,7 +80,7 @@ async def process_query(
         "default_file_size": slider_position,
         "pattern_type": pattern_type,
         "pattern": pattern,
-        "github_token": github_token,
+        "github_token": github_token,  # Keep the original token in the context
     }
 
     try:
@@ -85,7 +90,7 @@ async def process_query(
             from_web=True,
             include_patterns=include_patterns,
             ignore_patterns=exclude_patterns,
-            github_token=github_token,
+            github_token=effective_token,  # Use the effective token for the query
         )
         if not parsed_query.url:
             raise ValueError("The 'url' parameter is required.")

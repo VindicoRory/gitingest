@@ -1,5 +1,6 @@
 """ Configuration for the server. """
 
+import os
 from typing import Dict, List
 
 from fastapi.templating import Jinja2Templates
@@ -7,6 +8,8 @@ from fastapi.templating import Jinja2Templates
 MAX_DISPLAY_SIZE: int = 300_000
 DELETE_REPO_AFTER: int = 60 * 60  # In seconds
 
+# GitHub token for private repository access
+GITHUB_TOKEN = os.environ.get("GITINGEST_GITHUB_TOKEN", "")
 
 EXAMPLE_REPOS: List[Dict[str, str]] = [
     {"name": "Gitingest", "url": "https://github.com/cyclotruc/gitingest"},

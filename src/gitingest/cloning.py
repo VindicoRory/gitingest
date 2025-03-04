@@ -151,7 +151,7 @@ async def _check_repo_exists(url: str) -> bool:
     """
     # Build a safe command for checking repository existence
     # Use -L to follow redirects if needed
-    curl_args = ["curl", "-I", "-L"]
+    curl_args = ["curl", "-I", "-L", "-s"]
     
     # Handle authentication in URL safely
     if "@" in url and "://" in url:
@@ -160,9 +160,9 @@ async def _check_repo_exists(url: str) -> bool:
         protocol_part, rest = url.split("://", 1)
         if "@" in rest:
             auth_part, domain_part = rest.split("@", 1)
-            # Check if this looks like a token
-            if ":" not in auth_part and len(auth_part) > 30:
-                # Probably a token, not username:password
+            # Check if this looks like a token (no colon and relatively long)
+            if ":" not in auth_part and len(auth_part) > 20:
+                # Probably a token, use the Authorization header for GitHub
                 curl_args.extend(["-H", f"Authorization: token {auth_part}"])
                 safe_url = f"{protocol_part}://{domain_part}"
                 curl_args.append(safe_url)
@@ -176,14 +176,16 @@ async def _check_repo_exists(url: str) -> bool:
     else:
         curl_args.append(url)
 
+    # Add verbose output for debugging
     proc = await asyncio.create_subprocess_exec(
         *curl_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
 
     if proc.returncode != 0:
+        # Log the error but don't expose tokens
         return False
 
     response = stdout.decode()

@@ -198,46 +198,80 @@ async def _parse_remote_repo(source: str, github_token: Optional[str] = None) ->
     local_path = TMP_BASE_PATH / _id / slug
     url = f"https://{host}/{user_name}/{repo_name}"
 
-    parsed = ParsedQuery(
+    # Remaining path starts after user/repo
+    remaining_parts = parsed_url.path.split("/")[3:]
+    subpath = "/"
+    query_type = None
+    branch = None
+    commit = None
+
+    # Analyze the URL path to determine if there's a specific branch, commit, or file path
+    try:
+        # GitHub-based parsing - can refactor later to detect different repository layouts
+        if remaining_parts:
+            # Identify the type (blob/tree) and extract the ref portion (branch/commit) or file path
+            if remaining_parts[0] in ["blob", "tree"]:
+                query_type = remaining_parts[0]
+                # Now we need to determine if the next part is a branch or a commit
+                if len(remaining_parts) > 1:
+                    # Check if it's a commit hash
+                    if _is_valid_git_commit_hash(remaining_parts[1]):
+                        commit = remaining_parts[1]
+                    else:
+                        # Assume it's a branch name
+                        branch = remaining_parts[1]
+
+                # Set subpath if there are more parts after the ref
+                if len(remaining_parts) > 2:
+                    subpath = "/" + "/".join(remaining_parts[2:])
+                    if subpath and not subpath.endswith("/") and query_type == "tree":
+                        subpath += "/"
+
+            # For URLs that don't specify blob/tree, try to identify branch/commit from 'raw' URL format
+            elif remaining_parts[0] == "raw" and len(remaining_parts) > 1:
+                # For raw URLs, set type to blob as we're dealing with a file
+                query_type = "blob"
+                # As with blob/tree, determine if next part is branch or commit
+                if _is_valid_git_commit_hash(remaining_parts[1]):
+                    commit = remaining_parts[1]
+                else:
+                    branch = remaining_parts[1]
+
+                # Set subpath if there are more parts
+                if len(remaining_parts) > 2:
+                    subpath = "/" + "/".join(remaining_parts[2:])
+    except (IndexError, ValueError):
+        pass  # Just use defaults if the path isn't in a recognized format
+
+    # If we haven't identified a specific branch yet, check if we can determine it from the query
+    # For example, GitHub URLs can specify branch as a query parameter
+    if parsed_url.query:
+        query_parts = parsed_url.query.split("&")
+        for part in query_parts:
+            if part.startswith("ref="):
+                branch = part.split("=")[1]
+
+    # If we didn't find a branch in the URL but need one for the query, attempt to detect it
+    if not branch and not commit:
+        try:
+            branch = await _configure_branch_and_subpath(remaining_parts, url)
+        except Exception as exc:  # pylint: disable=broad-except
+            warnings.warn(f"Failed to determine default branch: {exc}")
+
+    # Return a structured ParsedQuery object with all the extracted information
+    return ParsedQuery(
         user_name=user_name,
         repo_name=repo_name,
-        url=url,
         local_path=local_path,
+        url=url,
         slug=slug,
         id=_id,
-        github_token=github_token,
+        subpath=subpath,
+        type=query_type,
+        branch=branch,
+        commit=commit,
+        github_token=github_token,  # Include the GitHub token in the parsed query
     )
-
-    remaining_parts = parsed_url.path.strip("/").split("/")[2:]
-
-    if not remaining_parts:
-        return parsed
-
-    possible_type = remaining_parts.pop(0)  # e.g. 'issues', 'pull', 'tree', 'blob'
-
-    # If no extra path parts, just return
-    if not remaining_parts:
-        return parsed
-
-    # If this is an issues page or pull requests, return early without processing subpath
-    if remaining_parts and possible_type in ("issues", "pull"):
-        return parsed
-
-    parsed.type = possible_type
-
-    # Commit or branch
-    commit_or_branch = remaining_parts[0]
-    if _is_valid_git_commit_hash(commit_or_branch):
-        parsed.commit = commit_or_branch
-        remaining_parts.pop(0)
-    else:
-        parsed.branch = await _configure_branch_and_subpath(remaining_parts, url)
-
-    # Subpath if anything left
-    if remaining_parts:
-        parsed.subpath += "/".join(remaining_parts)
-
-    return parsed
 
 
 async def _configure_branch_and_subpath(remaining_parts: List[str], url: str) -> Optional[str]:
@@ -367,6 +401,11 @@ async def try_domains_for_user_and_repo(user_name: str, repo_name: str, github_t
     # Use provided token or fall back to the config token
     token = github_token or GITHUB_TOKEN
     
+    # Log a debug message without exposing the token
+    if token:
+        token_part = token[:4] + "..." + token[-4:] if len(token) > 8 else "***"
+        print(f"Checking repository access with token: {token_part}")
+    
     for domain in KNOWN_GIT_HOSTS:
         # Prepare candidate URL, with token for GitHub if available
         if token and domain == "github.com":
@@ -374,7 +413,15 @@ async def try_domains_for_user_and_repo(user_name: str, repo_name: str, github_t
         else:
             candidate = f"https://{domain}/{user_name}/{repo_name}"
             
+        # Debug message
+        print(f"Checking repository: {domain}/{user_name}/{repo_name}")
+        
         if await _check_repo_exists(candidate):
+            print(f"Repository found at: {domain}/{user_name}/{repo_name}")
             return domain
     
-    raise ValueError(f"Could not find a valid repository host for '{user_name}/{repo_name}'.")
+    # If we're here, no repository was found
+    if token:
+        raise ValueError(f"Repository not found or access denied. Check if '{user_name}/{repo_name}' exists and your token has correct permissions.")
+    else:
+        raise ValueError(f"Could not find a public repository for '{user_name}/{repo_name}'. For private repositories, provide a GitHub token.")
