@@ -43,6 +43,7 @@ class ParsedQuery:  # pylint: disable=too-many-instance-attributes
     ignore_patterns: Optional[Set[str]] = None
     include_patterns: Optional[Set[str]] = None
     pattern_type: Optional[str] = None
+    github_token: Optional[str] = None
 
     def extact_clone_config(self) -> CloneConfig:
         """
@@ -68,6 +69,7 @@ class ParsedQuery:  # pylint: disable=too-many-instance-attributes
             branch=self.branch,
             subpath=self.subpath,
             blob=self.type == "blob",
+            github_token=self.github_token,
         )
 
 
@@ -77,6 +79,7 @@ async def parse_query(
     from_web: bool,
     include_patterns: Optional[Union[str, Set[str]]] = None,
     ignore_patterns: Optional[Union[str, Set[str]]] = None,
+    github_token: Optional[str] = None,
 ) -> ParsedQuery:
     """
     Parse the input source (URL or path) to extract relevant details for the query.
@@ -97,6 +100,8 @@ async def parse_query(
         Patterns to include, by default None. Can be a set of strings or a single string.
     ignore_patterns : Union[str, Set[str]], optional
         Patterns to ignore, by default None. Can be a set of strings or a single string.
+    github_token : str, optional
+        GitHub token for private repository access, by default None.
 
     Returns
     -------
@@ -107,7 +112,7 @@ async def parse_query(
     # Determine the parsing method based on the source type
     if from_web or urlparse(source).scheme in ("https", "http") or any(h in source for h in KNOWN_GIT_HOSTS):
         # We either have a full URL or a domain-less slug
-        parsed_query = await _parse_remote_repo(source)
+        parsed_query = await _parse_remote_repo(source, github_token)
     else:
         # Local path scenario
         parsed_query = _parse_local_dir_path(source)
@@ -139,10 +144,11 @@ async def parse_query(
         max_file_size=max_file_size,
         ignore_patterns=ignore_patterns_set,
         include_patterns=parsed_include,
+        github_token=github_token,
     )
 
 
-async def _parse_remote_repo(source: str) -> ParsedQuery:
+async def _parse_remote_repo(source: str, github_token: Optional[str] = None) -> ParsedQuery:
     """
     Parse a repository URL into a structured query dictionary.
 
@@ -155,6 +161,8 @@ async def _parse_remote_repo(source: str) -> ParsedQuery:
     ----------
     source : str
         The URL or domain-less slug to parse.
+    github_token : str, optional
+        GitHub token for private repository access (default is None).
 
     Returns
     -------
@@ -176,7 +184,7 @@ async def _parse_remote_repo(source: str) -> ParsedQuery:
             _validate_host(tmp_host)
         else:
             # No scheme, no domain => user typed "user/repo", so we'll guess the domain.
-            host = await try_domains_for_user_and_repo(*_get_user_and_repo_from_path(source))
+            host = await try_domains_for_user_and_repo(*_get_user_and_repo_from_path(source), github_token=github_token)
             source = f"{host}/{source}"
 
         source = "https://" + source
@@ -197,6 +205,7 @@ async def _parse_remote_repo(source: str) -> ParsedQuery:
         local_path=local_path,
         slug=slug,
         id=_id,
+        github_token=github_token,
     )
 
     remaining_parts = parsed_url.path.strip("/").split("/")[2:]
@@ -330,7 +339,7 @@ def _parse_local_dir_path(path_str: str) -> ParsedQuery:
     )
 
 
-async def try_domains_for_user_and_repo(user_name: str, repo_name: str) -> str:
+async def try_domains_for_user_and_repo(user_name: str, repo_name: str, github_token: Optional[str] = None) -> str:
     """
     Attempt to find a valid repository host for the given user_name and repo_name.
 
@@ -340,6 +349,8 @@ async def try_domains_for_user_and_repo(user_name: str, repo_name: str) -> str:
         The username or owner of the repository.
     repo_name : str
         The name of the repository.
+    github_token : str, optional
+        GitHub token for private repository access (default is None).
 
     Returns
     -------
@@ -351,8 +362,19 @@ async def try_domains_for_user_and_repo(user_name: str, repo_name: str) -> str:
     ValueError
         If no valid repository host is found for the given user_name and repo_name.
     """
+    from gitingest.config import GITHUB_TOKEN
+
+    # Use provided token or fall back to the config token
+    token = github_token or GITHUB_TOKEN
+    
     for domain in KNOWN_GIT_HOSTS:
-        candidate = f"https://{domain}/{user_name}/{repo_name}"
+        # Prepare candidate URL, with token for GitHub if available
+        if token and domain == "github.com":
+            candidate = f"https://{token}@{domain}/{user_name}/{repo_name}"
+        else:
+            candidate = f"https://{domain}/{user_name}/{repo_name}"
+            
         if await _check_repo_exists(candidate):
             return domain
+    
     raise ValueError(f"Could not find a valid repository host for '{user_name}/{repo_name}'.")
