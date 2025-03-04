@@ -3,11 +3,13 @@
 # pylint: disable=no-value-for-parameter
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Optional, Tuple
 
 import click
 
-from gitingest.config import MAX_FILE_SIZE, OUTPUT_FILE_NAME
+from gitingest.config import GITHUB_TOKEN, MAX_FILE_SIZE, OUTPUT_FILE_NAME, TOKEN_FILE_PATH
 from gitingest.repository_ingest import ingest_async
 
 
@@ -18,6 +20,8 @@ from gitingest.repository_ingest import ingest_async
 @click.option("--exclude-pattern", "-e", multiple=True, help="Patterns to exclude")
 @click.option("--include-pattern", "-i", multiple=True, help="Patterns to include")
 @click.option("--branch", "-b", default=None, help="Branch to clone and ingest")
+@click.option("--github-token", "-g", default=None, help="GitHub token for private repository access")
+@click.option("--save-token", is_flag=True, help="Save the provided GitHub token for future use")
 def main(
     source: str,
     output: Optional[str],
@@ -25,6 +29,8 @@ def main(
     exclude_pattern: Tuple[str, ...],
     include_pattern: Tuple[str, ...],
     branch: Optional[str],
+    github_token: Optional[str],
+    save_token: bool,
 ):
     """
      Main entry point for the CLI. This function is called when the CLI is run as a script.
@@ -46,9 +52,31 @@ def main(
         A tuple of patterns to include during the analysis. Only files matching these patterns will be processed.
     branch : str, optional
         The branch to clone (optional).
+    github_token : str, optional
+        GitHub token for private repository access. If provided, overrides the token from config.
+    save_token : bool
+        If True, saves the provided GitHub token for future use.
     """
+    # If token is provided and save_token is True, save it to the token file
+    active_token = GITHUB_TOKEN
+    if github_token:
+        active_token = github_token
+        if save_token:
+            try:
+                # Create directory if it doesn't exist
+                token_dir = os.path.dirname(TOKEN_FILE_PATH)
+                os.makedirs(token_dir, exist_ok=True)
+                
+                # Save token to file with secure permissions
+                with open(TOKEN_FILE_PATH, "w", encoding="utf-8") as token_file:
+                    token_file.write(github_token)
+                os.chmod(TOKEN_FILE_PATH, 0o600)  # Read/write for owner only
+                click.echo(f"GitHub token saved to {TOKEN_FILE_PATH}")
+            except (IOError, OSError) as exc:
+                click.echo(f"Warning: Failed to save GitHub token: {exc}", err=True)
+    
     # Main entry point for the CLI. This function is called when the CLI is run as a script.
-    asyncio.run(_async_main(source, output, max_size, exclude_pattern, include_pattern, branch))
+    asyncio.run(_async_main(source, output, max_size, exclude_pattern, include_pattern, branch, active_token))
 
 
 async def _async_main(
@@ -58,6 +86,7 @@ async def _async_main(
     exclude_pattern: Tuple[str, ...],
     include_pattern: Tuple[str, ...],
     branch: Optional[str],
+    github_token: Optional[str] = None,
 ) -> None:
     """
     Analyze a directory or repository and create a text dump of its contents.
@@ -80,6 +109,8 @@ async def _async_main(
         A tuple of patterns to include during the analysis. Only files matching these patterns will be processed.
     branch : str, optional
         The branch to clone (optional).
+    github_token : str, optional
+        GitHub token for private repository access.
 
     Raises
     ------
@@ -93,7 +124,7 @@ async def _async_main(
 
         if not output:
             output = OUTPUT_FILE_NAME
-        summary, _, _ = await ingest_async(source, max_size, include_patterns, exclude_patterns, branch, output=output)
+        summary, _, _ = await ingest_async(source, max_size, include_patterns, exclude_patterns, branch, output=output, github_token=github_token)
 
         click.echo(f"Analysis complete! Output written to: {output}")
         click.echo("\nSummary:")
