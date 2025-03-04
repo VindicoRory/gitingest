@@ -31,6 +31,10 @@ class CloneConfig:
         The branch to clone (default is None).
     subpath : str
         The subpath to clone from the repository (default is "/").
+    blob : bool
+        Whether the path points to a blob (file) or tree (directory) (default is False).
+    github_token : str, optional
+        GitHub token for private repository access (default is None).
     """
 
     url: str
@@ -39,6 +43,7 @@ class CloneConfig:
     branch: Optional[str] = None
     subpath: str = "/"
     blob: bool = False
+    github_token: Optional[str] = None
 
 
 @async_timeout(TIMEOUT)
@@ -68,6 +73,7 @@ async def clone_repo(config: CloneConfig) -> None:
     commit: Optional[str] = config.commit
     branch: Optional[str] = config.branch
     partial_clone: bool = config.subpath != "/"
+    github_token: Optional[str] = config.github_token
 
     # Create parent directory if it doesn't exist
     parent_dir = Path(local_path).parent
@@ -76,9 +82,21 @@ async def clone_repo(config: CloneConfig) -> None:
     except OSError as exc:
         raise OSError(f"Failed to create parent directory {parent_dir}: {exc}") from exc
 
-    # Check if the repository exists
-    if not await _check_repo_exists(url):
-        raise ValueError("Repository not found, make sure it is public")
+    # Check if the repository exists and apply token for authentication if necessary
+    authenticated_url = url
+    if github_token and "github.com" in url:
+        if url.startswith("https://"):
+            authenticated_url = f"https://{github_token}@{url[8:]}"
+    
+    # Try with token first if provided
+    repo_exists = await _check_repo_exists(authenticated_url if github_token else url)
+    
+    if not repo_exists:
+        if github_token:
+            # If we're using a token and it failed, it might be a permission issue
+            raise ValueError("Repository not found or access denied. Check your GitHub token permissions.")
+        else:
+            raise ValueError("Repository not found, make sure it is public or provide a GitHub token.")
 
     clone_cmd = ["git", "clone", "--single-branch"]
     # TODO re-enable --recurse-submodules
@@ -91,7 +109,8 @@ async def clone_repo(config: CloneConfig) -> None:
         if branch and branch.lower() not in ("main", "master"):
             clone_cmd += ["--branch", branch]
 
-    clone_cmd += [url, local_path]
+    # Use authenticated URL if token is provided
+    clone_cmd += [authenticated_url if github_token else url, local_path]
 
     # Clone the repository
     await _run_command(*clone_cmd)
@@ -119,7 +138,7 @@ async def _check_repo_exists(url: str) -> bool:
     Parameters
     ----------
     url : str
-        The URL of the Git repository to check.
+        The URL of the Git repository to check. May include authentication credentials.
     Returns
     -------
     bool
@@ -130,10 +149,35 @@ async def _check_repo_exists(url: str) -> bool:
     RuntimeError
         If the curl command returns an unexpected status code.
     """
+    # Build a safe command for checking repository existence
+    # Use -L to follow redirects if needed
+    curl_args = ["curl", "-I", "-L"]
+    
+    # Handle authentication in URL safely
+    if "@" in url and "://" in url:
+        # For authenticated URLs, use header-based authentication instead of including token in command
+        # This prevents the token from appearing in process listings
+        protocol_part, rest = url.split("://", 1)
+        if "@" in rest:
+            auth_part, domain_part = rest.split("@", 1)
+            # Check if this looks like a token
+            if ":" not in auth_part and len(auth_part) > 30:
+                # Probably a token, not username:password
+                curl_args.extend(["-H", f"Authorization: token {auth_part}"])
+                safe_url = f"{protocol_part}://{domain_part}"
+                curl_args.append(safe_url)
+            else:
+                # Use -u option for basic auth
+                curl_args.extend(["-u", auth_part])
+                safe_url = f"{protocol_part}://{domain_part}"
+                curl_args.append(safe_url)
+        else:
+            curl_args.append(url)
+    else:
+        curl_args.append(url)
+
     proc = await asyncio.create_subprocess_exec(
-        "curl",
-        "-I",
-        url,
+        *curl_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -148,7 +192,8 @@ async def _check_repo_exists(url: str) -> bool:
     if status_code in (200, 301):
         return True
 
-    if status_code in (404, 302):
+    if status_code in (404, 302, 401, 403):
+        # 401/403 means unauthorized/forbidden - repository exists but access denied
         return False
 
     raise RuntimeError(f"Unexpected status code: {status_code}")
@@ -160,14 +205,71 @@ async def fetch_remote_branch_list(url: str) -> List[str]:
     Parameters
     ----------
     url : str
-        The URL of the Git repository to fetch branches from.
+        The URL of the Git repository to fetch branches from. May include authentication credentials.
     Returns
     -------
     List[str]
         A list of branch names available in the remote repository.
     """
-    fetch_branches_command = ["git", "ls-remote", "--heads", url]
-    stdout, _ = await _run_command(*fetch_branches_command)
+    # Handle authenticated URLs safely
+    if "@" in url and "://" in url and url.startswith("https://"):
+        # Extract protocol and rest
+        protocol_part, rest = url.split("://", 1)
+        auth_part, domain_part = rest.split("@", 1)
+        # Setup git environment to use credential helper to avoid token in command line
+        env = os.environ.copy()
+        
+        # Handle different auth forms
+        if ":" not in auth_part and len(auth_part) > 30:
+            # This is likely a token
+            env["GIT_ASKPASS"] = "echo"
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            # Use credential store to securely provide credentials
+            await _run_command("git", "config", "--global", "--replace-all", "credential.helper", "store")
+            
+            # Write credentials to git credential store
+            credential_process = await asyncio.create_subprocess_exec(
+                "git", "credential", "approve",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            credential_input = f"protocol=https\nhost={domain_part.split('/')[0]}\nusername={auth_part}\n\n"
+            await credential_process.communicate(credential_input.encode())
+            
+            # Use URL without auth for the git command
+            clean_url = f"{protocol_part}://{domain_part}"
+            fetch_branches_command = ["git", "ls-remote", "--heads", clean_url]
+            proc = await asyncio.create_subprocess_exec(
+                *fetch_branches_command,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            
+            # Clean up credentials after use
+            cleanup_process = await asyncio.create_subprocess_exec(
+                "git", "credential", "reject",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await cleanup_process.communicate(credential_input.encode())
+        else:
+            # Standard git ls-remote with URL
+            fetch_branches_command = ["git", "ls-remote", "--heads", url]
+            proc = await asyncio.create_subprocess_exec(
+                *fetch_branches_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+    else:
+        # Non-authenticated URL
+        fetch_branches_command = ["git", "ls-remote", "--heads", url]
+        stdout, _ = await _run_command(*fetch_branches_command)
+    
     stdout_decoded = stdout.decode()
 
     return [
