@@ -61,9 +61,25 @@ gitingest https://github.com/cyclotruc/gitingest
 
 # See more options
 gitingest --help
+
+# Access a private GitHub repository with a token
+gitingest https://github.com/username/private-repo --github-token YOUR_TOKEN
+
+# Save the GitHub token for future use
+gitingest https://github.com/username/private-repo --github-token YOUR_TOKEN --save-token
 ```
 
 This will write the digest in a text file (default `digest.txt`) in your current working directory.
+
+### GitHub Token for Private Repositories
+
+You can use a GitHub personal access token to clone and analyze private repositories:
+
+1. **Command line option**: Pass the token directly with `--github-token` flag
+2. **Environment variable**: Set `GITINGEST_GITHUB_TOKEN` in your environment
+3. **Token file**: Create a file at `~/.gitingest/github_token` containing just the token
+
+The token is used in this priority order: command line > environment variable > token file
 
 ## 🐍 Python package usage
 
@@ -75,6 +91,9 @@ summary, tree, content = ingest("path/to/directory")
 
 # or from URL
 summary, tree, content = ingest("https://github.com/cyclotruc/gitingest")
+
+# Access a private GitHub repository
+summary, tree, content = ingest("https://github.com/username/private-repo", github_token="YOUR_TOKEN")
 ```
 
 By default, this won't write a file but can be enabled with the `output` argument.
@@ -85,6 +104,9 @@ from gitingest import ingest_async
 import asyncio
 
 result = asyncio.run(ingest_async("path/to/directory"))
+
+# Access a private GitHub repository asynchronously
+result = asyncio.run(ingest_async("https://github.com/username/private-repo", github_token="YOUR_TOKEN"))
 ```
 
 ### Jupyter notebook usage
@@ -95,6 +117,8 @@ from gitingest import ingest_async
 # Use await directly in Jupyter
 summary, tree, content = await ingest_async("path/to/directory")
 
+# Access a private GitHub repository
+summary, tree, content = await ingest_async("https://github.com/username/private-repo", github_token="YOUR_TOKEN")
 ```
 
 This is because Jupyter notebooks are asynchronous by default.
