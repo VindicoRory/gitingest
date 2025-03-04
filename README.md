@@ -137,6 +137,12 @@ This is because Jupyter notebooks are asynchronous by default.
    docker run -d --name gitingest -p 8000:8000 gitingest
    ```
 
+   To provide a GitHub token for private repository access:
+
+   ``` bash
+   docker run -d --name gitingest -p 8000:8000 -e GITINGEST_GITHUB_TOKEN=your_github_token gitingest
+   ```
+
 The application will be available at `http://localhost:8000`.
 
 If you are hosting it on a domain, you can specify the allowed hostnames via env variable `ALLOWED_HOSTS`.
